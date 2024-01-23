@@ -181,31 +181,31 @@ def get_args_parser():
 
 
 def main(args):
-    utils.init_distributed_mode(args)
-    print("git:\n  {}\n".format(utils.get_sha()))
+    utils.init_distributed_mode(args) #获取设备的硬件信息，初始化硬件如GPU的一些参数
+    print("git:\n  {}\n".format(utils.get_sha())) 
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
 
-    device = torch.device(args.device)
+    device = torch.device(args.device) #默认值是cuda，而不是显卡编号，有点不解
 
     # fix the seed for reproducibility
-    seed = args.seed + utils.get_rank()
+    seed = args.seed + utils.get_rank() #rank是分布式计算中表示当前进程在集群中的编号
     torch.manual_seed(seed)
     np.random.seed(seed)
-    random.seed(seed)
+    random.seed(seed) #生成随机种子，用于这几个类中的一些随机选取或者处理的函数
 
-    model, criterion, postprocessors = build_model(args)
-    model.to(device)
+    model, criterion, postprocessors = build_model(args) #构建model这样一个对象，它是整个网络的一个架构
+    model.to(device) #猜测是向model里添加设备的一些信息，有助于model选择不同的策略运行
 
-    model_without_ddp = model
+    model_without_ddp = model #没有修改的原始框架，为后续处理做一个备份
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print('number of params:', n_parameters)
+    print('number of params:', n_parameters) #如果要求计算所有参数量就将模型各部分的参数给统计一下
 
-    dataset_train = build_dataset(image_set='train', args=args)
+    dataset_train = build_dataset(image_set='train', args=args) #训练数据的对象，包含数据和处理函数
     dataset_val = build_dataset(image_set='val', args=args)
-
+#这里由于分布式训练是需要对数据进行采样用在不同的卡上去训练
     if args.distributed:
         if args.cache_mode:
             sampler_train = samplers.NodeDistributedSampler(dataset_train)
@@ -220,12 +220,12 @@ def main(args):
     batch_sampler_train = torch.utils.data.BatchSampler(
         sampler_train, args.batch_size, drop_last=True)
     if args.dataset_file in ['e2e_mot', 'e2e_dance', 'mot', 'ori_mot', 'e2e_static_mot', 'e2e_joint']:
-        collate_fn = utils.mot_collate_fn
+        collate_fn = utils.mot_collate_fn #对于batch sequence的补齐
     else:
         collate_fn = utils.collate_fn
     data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
                                    collate_fn=collate_fn, num_workers=args.num_workers,
-                                   pin_memory=True)
+                                   pin_memory=True)  #根据这些对象来创建新的数据对象，这种面向对象式的编程真有意思数据和函数皆为数据
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=collate_fn, num_workers=args.num_workers,
                                  pin_memory=True)
@@ -237,7 +237,7 @@ def main(args):
                 out = True
                 break
         return out
-
+#这里的参数是指常用超参吧，而不是训练后得到的节点参数吧
     param_dicts = [
         {
             "params":
@@ -256,7 +256,7 @@ def main(args):
     ]
     if args.sgd:
         optimizer = torch.optim.SGD(param_dicts, lr=args.lr, momentum=0.9,
-                                    weight_decay=args.weight_decay)
+                                    weight_decay=args.weight_decay) #设置优化器
     else:
         optimizer = torch.optim.AdamW(param_dicts, lr=args.lr,
                                       weight_decay=args.weight_decay)
@@ -269,18 +269,19 @@ def main(args):
     if args.dataset_file == "coco_panoptic":
         # We also evaluate AP during panoptic training, on original coco DS
         coco_val = datasets.coco.build("val", args)
-        base_ds = get_coco_api_from_dataset(coco_val)
+        base_ds = get_coco_api_from_dataset(coco_val) #可能是指某一个需要特殊处理的数据集吧，先把这个对象给建立好
     else:
         base_ds = get_coco_api_from_dataset(dataset_val)
 
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
         model_without_ddp.detr.load_state_dict(checkpoint['model'])
-
+#原来这就是不训练的模型然后加载训练好的参数集就行
     if args.pretrained is not None:
         model_without_ddp = load_model(model_without_ddp, args.pretrained)
 
     output_dir = Path(args.output_dir)
+    #这里是指如果再重新训练时，那么就可以使用checkpoint从中断的地方训练，是节约资源的一种做法
     if args.resume:
         if args.resume.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -320,18 +321,20 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
-
+#准备完成，开始将训练对象给创建出来
     train_func = train_one_epoch
     if args.dataset_file in ['e2e_mot', 'e2e_dance', 'mot', 'ori_mot', 'e2e_static_mot', 'e2e_joint']:
         train_func = train_one_epoch_mot
         dataset_train.set_epoch(args.start_epoch)
         dataset_val.set_epoch(args.start_epoch)
     for epoch in range(args.start_epoch, args.epochs):
+        #每个epoch都要训练
         if args.distributed:
             sampler_train.set_epoch(epoch)
+            #train_func中传入model，标准，以及数据和优化器，device等，要开始训练了
         train_stats = train_func(
             model, criterion, data_loader_train, optimizer, device, epoch, args.clip_max_norm)
-        lr_scheduler.step()
+        lr_scheduler.step() #更新学习率
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             # extra checkpoint before LR drop and every 5 epochs
@@ -350,7 +353,7 @@ def main(args):
             test_stats, coco_evaluator = evaluate(
                 model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
             )
-
+             #这里的log_stats值得一看，因为需要的什么观测状态可以在类里添加
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                          **{f'test_{k}': v for k, v in test_stats.items()},
                          'epoch': epoch,
