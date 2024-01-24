@@ -380,13 +380,13 @@ class MOTR(nn.Module):
             two_stage: two-stage Deformable DETR
         """
         super().__init__()
-        self.num_queries = num_queries
-        self.track_embed = track_embed
+        self.num_queries = num_queries #300
+        self.track_embed = track_embed #query_interaction_layer
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.num_classes = num_classes
-        self.class_embed = nn.Linear(hidden_dim, num_classes)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        self.class_embed = nn.Linear(hidden_dim, num_classes) #分类器
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3) 
         self.num_feature_levels = num_feature_levels
         self.use_checkpoint = use_checkpoint
         if not two_stage:
@@ -417,7 +417,7 @@ class MOTR(nn.Module):
         self.aux_loss = aux_loss
         self.with_box_refine = with_box_refine
         self.two_stage = two_stage
-
+#上一段是输入的图片经过卷积网络减少尺寸，下面是初始化网络的
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         self.class_embed.bias.data = torch.ones(num_classes) * bias_value
@@ -653,7 +653,7 @@ class MOTR(nn.Module):
             outputs['losses_dict'] = self.criterion.losses_dict
         return outputs
 
-
+#这是motr的模型建立，确立backbone，还有要检测的种类
 def build(args):
     dataset_to_num_classes = {
         'coco': 91,
@@ -667,10 +667,10 @@ def build(args):
     num_classes = dataset_to_num_classes[args.dataset_file]
     device = torch.device(args.device)
 
-    backbone = build_backbone(args)
+    backbone = build_backbone(args) #确立backbone，好像是resnet50
 
-    transformer = build_deforamble_transformer(args)
-    d_model = transformer.d_model
+    transformer = build_deforamble_transformer(args) #建立可变形卷积，这是encoder部分吧
+    d_model = transformer.d_model #
     hidden_dim = args.dim_feedforward
     query_interaction_layer = build_query_interaction_layer(args, args.query_interaction_layer, d_model, hidden_dim, d_model*2)
 
@@ -692,7 +692,7 @@ def build(args):
                                     'frame_{}_aux{}_loss_giou'.format(i, j): args.giou_loss_coef,
                                     })
     if args.memory_bank_type is not None and len(args.memory_bank_type) > 0:
-        memory_bank = build_memory_bank(args, d_model, hidden_dim, d_model * 2)
+        memory_bank = build_memory_bank(args, d_model, hidden_dim, d_model * 2) #这里就是后面的信息交互的地方
         for i in range(num_frames_per_batch):
             weight_dict.update({"frame_{}_track_loss_ce".format(i): args.cls_loss_coef})
     else:
